@@ -7,3 +7,10 @@ class TTask(Base):
     task_name: str = Column(String, index=True)
     task_description: str = Column(Text)
     done_status: bool = Column(Boolean, index=True)
+    
+    
+class Url(Base):
+    __tablename__="url"
+    id:int =Column(Integer,primary_key=True,index=True)
+    url:str=Column(String,index=True)
+    shorturl:str=Column(String,index=True)

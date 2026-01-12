@@ -1,18 +1,23 @@
 from fastapi import FastAPI, Depends, HTTPException,status
 from app.databse import engine, Base, SessionLocal
-from app.models import TTask
+from app.models import TTask,Url
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+import pyshorteners
 
 app = FastAPI()
 
 # Create the database tables
 TTask.metadata.create_all(bind=engine)
+Url.metadata.create_all(bind=engine)
 
 class TaskCreate(BaseModel):
     task_name: str
     task_description: str
     done_status: bool
+    
+class URLShort(BaseModel):
+    url:str
 
 
 def get_db():
@@ -80,3 +85,11 @@ def delete_task(task_name: str, db: Session = Depends(get_db)):
     return {"message": "Task deleted successfully"} 
 
 
+@app.post("/url-shortner")
+def url_shortner(url:URLShort,db: Session = Depends(get_db)):
+    s = pyshorteners.Shortener()
+    short_url = s.tinyurl.short(url.url)
+    add_url=Url(url=url.url,shorturl=short_url)
+    db.add(add_url)
+    db.commit()
+    return {"short-url":{short_url}}
