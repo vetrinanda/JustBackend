@@ -1,31 +1,24 @@
 from fastapi import FastAPI, Depends, HTTPException,status
-from app.databse import engine, Base, SessionLocal
-from app.models import TTask,Url
-from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from app.databse import supabase
+from app.models import TaskCreate
+# from sqlalchemy.orm import Session
 import pyshorteners
 
 app = FastAPI()
 
 # Create the database tables
-TTask.metadata.create_all(bind=engine)
-Url.metadata.create_all(bind=engine)
-
-class TaskCreate(BaseModel):
-    task_name: str
-    task_description: str
-    done_status: bool
-    
-class URLShort(BaseModel):
-    url:str
+# TTask.metadata.create_all(bind=engine)
+# Url.metadata.create_all(bind=engine)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+
+
+# def get_db():
+#     db = SessionLocal()
+#     try:
+#         yield db
+#     finally:
+#         db.close()
         
 # db: Session = Depends(get_db)
 
@@ -36,60 +29,70 @@ def read_root():
 
 
 @app.get("/tasks/")
-def read_tasks(db: Session = Depends(get_db)):
-    tasks = db.query(TTask).all()
-    return tasks
+def read_tasks():
+    response = (
+    supabase.table("tasks")
+    .select("*")
+    .execute()
+)
+    return response.data
 
 @app.post("/tasks/")
-def create_task(task: TaskCreate, db: Session = Depends(get_db)):
-    new_task = TTask(task_name=task.task_name, task_description=task.task_description, done_status=task.done_status)
-    db.add(new_task)
-    db.commit()
-    db.refresh(new_task)
-    return new_task
+def create_task(task: TaskCreate):
+    response = (
+    supabase.table("tasks")
+    .insert({"task_name": task.task_name,
+             "task_description": task.task_description,
+             "done_status": task.done_status})
+    .execute())
+    return {"Task Added Sucessfully": response.data}
 
 @app.get("/tasks/done_status")
-def get_task_status(task_status: bool, db: Session = Depends(get_db)):
-    tasks = db.query(TTask).filter(TTask.done_status == task_status).all()
-    if not tasks:
-        raise HTTPException(status_code=404, detail="No tasks found with this status")
-    return tasks
+def get_task_status(task_status: bool):
+    response = (
+    supabase.table("tasks")
+    .select("*")
+    .eq("done_status",task_status)
+    .execute())
+    return {"Response": response.data}
 
 
 @app.get("/tasks/{task_name}")
-def read_task(task_name: str, db: Session = Depends(get_db)):
-    task = db.query(TTask).filter(TTask.task_name == task_name).first()
-    if task is None:
-        return {"error": "Task not found"}
-    return task
+def read_task(task_name: str):
+    response=(supabase.table("tasks")
+              .select("*")
+              .eq("task_name",task_name)
+              .execute())
+    return {"Reponse":response.data}
 
 @app.put("/tasks/{task_name}")
-def update_task(task_name: str, task: TaskCreate, db: Session = Depends(get_db)):
-    db_task = db.query(TTask).filter(TTask.task_name == task_name).first()
-    if db_task is None:
-        return {"error": "Task not found"}
-    db_task.task_name = task.task_name
-    db_task.task_description = task.task_description
-    db_task.done_status = task.done_status
-    db.commit()
-    db.refresh(db_task)
-    return db_task
+def update_task(task_name: str, task: TaskCreate):
+    response = (
+    supabase.table("tasks")
+    .update({"task_name": task.task_name,
+             "task_description": task.task_description,
+             "done_status": task.done_status})
+    .eq("task_name",task_name)
+    .execute())
+    return {"Updated the Task Details":response.data}
 
 @app.delete("/tasks/{task_name}")
-def delete_task(task_name: str, db: Session = Depends(get_db)):
-    db_task = db.query(TTask).filter(TTask.task_name == task_name).first()
-    if db_task is None:
-        return {"error": "Task not found"}
-    db.delete(db_task)
-    db.commit()
-    return {"message": "Task deleted successfully"} 
+def delete_task(task_name: str):
+    response = (
+    supabase.table("tasks")
+    .delete()
+    .eq("task_name",task_name)
+    .execute())
+    return {"Task deleted successfully": response.data} 
 
 
 @app.post("/url-shortner")
-def url_shortner(url:URLShort,db: Session = Depends(get_db)):
+def url_shortner(url:str):
     s = pyshorteners.Shortener()
-    short_url = s.tinyurl.short(url.url)
-    add_url=Url(url=url.url,shorturl=short_url)
-    db.add(add_url)
-    db.commit()
-    return {"short-url":{short_url}}
+    short_url = s.tinyurl.short(url)
+    response = (
+    supabase.table("url_shortner")
+    .insert({"url": url,"short_url": short_url,})
+    .execute())
+    inserted_data = response.data[0]
+    return {"short_url": inserted_data["short_url"]}
