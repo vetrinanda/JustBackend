@@ -1,8 +1,10 @@
 from fastapi import FastAPI, Depends, HTTPException,status
+from fastapi import Request
 from app.databse import supabase
 from app.models import TaskCreate
 # from sqlalchemy.orm import Session
 import pyshorteners
+from app.limiter import limiter
 
 app = FastAPI()
 
@@ -10,7 +12,7 @@ app = FastAPI()
 # TTask.metadata.create_all(bind=engine)
 # Url.metadata.create_all(bind=engine)
 
-
+limit="2/minute"
 
 
 # def get_db():
@@ -29,7 +31,8 @@ def read_root():
 
 
 @app.get("/tasks/")
-def read_tasks():
+@limiter.limit(limit)
+def read_tasks(request: Request):
     response = (
     supabase.table("tasks")
     .select("*")
@@ -38,7 +41,8 @@ def read_tasks():
     return response.data
 
 @app.post("/tasks/")
-def create_task(task: TaskCreate):
+@limiter.limit(limit)
+def create_task(request: Request, task: TaskCreate):
     response = (
     supabase.table("tasks")
     .insert({"task_name": task.task_name,
@@ -48,7 +52,8 @@ def create_task(task: TaskCreate):
     return {"Task Added Sucessfully": response.data}
 
 @app.get("/tasks/done_status")
-def get_task_status(task_status: bool):
+@limiter.limit(limit)
+def get_task_status(request: Request,task_status: bool):
     response = (
     supabase.table("tasks")
     .select("*")
@@ -58,7 +63,8 @@ def get_task_status(task_status: bool):
 
 
 @app.get("/tasks/{task_name}")
-def read_task(task_name: str):
+@limiter.limit(limit)
+def read_task(request: Request,task_name: str):
     response=(supabase.table("tasks")
               .select("*")
               .eq("task_name",task_name)
@@ -66,7 +72,8 @@ def read_task(task_name: str):
     return {"Reponse":response.data}
 
 @app.put("/tasks/{task_name}")
-def update_task(task_name: str, task: TaskCreate):
+@limiter.limit(limit)
+def update_task(request: Request,task_name: str, task: TaskCreate):
     response = (
     supabase.table("tasks")
     .update({"task_name": task.task_name,
@@ -77,7 +84,8 @@ def update_task(task_name: str, task: TaskCreate):
     return {"Updated the Task Details":response.data}
 
 @app.delete("/tasks/{task_name}")
-def delete_task(task_name: str):
+@limiter.limit(limit)
+def delete_task(request: Request,task_name: str):
     response = (
     supabase.table("tasks")
     .delete()
@@ -87,7 +95,8 @@ def delete_task(task_name: str):
 
 
 @app.post("/url-shortner")
-def url_shortner(url:str):
+@limiter.limit(limit)
+def url_shortner(request: Request,url:str):
     s = pyshorteners.Shortener()
     short_url = s.tinyurl.short(url)
     response = (
