@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, Depends, HTTPException,status
 from fastapi import Request
 from app.databse import supabase
@@ -12,7 +13,7 @@ app = FastAPI()
 # TTask.metadata.create_all(bind=engine)
 # Url.metadata.create_all(bind=engine)
 
-limit="2/minute"
+limit=os.getenv("LIMIT")
 
 
 # def get_db():
