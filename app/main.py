@@ -1,6 +1,8 @@
 import os
 from fastapi import FastAPI, Depends, HTTPException,status
 from fastapi import Request
+from pydantic import BaseModel
+from dotenv import load_dotenv
 from app.databse import supabase
 from app.models import TaskCreate
 # from sqlalchemy.orm import Session
@@ -15,6 +17,10 @@ app = FastAPI()
 
 limit=os.getenv("LIMIT")
 
+class SignupData(BaseModel):
+    email: str
+    password: str
+
 
 # def get_db():
 #     db = SessionLocal()
@@ -26,10 +32,29 @@ limit=os.getenv("LIMIT")
 # db: Session = Depends(get_db)
 
 
-app.get("/")
+@app.get("/")
 def read_root():
     return {"message": "Welcome to the Task Management API"}
 
+app.post("/health")
+def health_check():
+    return {"status": "API is healthy"}
+
+@app.post("/signup")
+def signup(sign:SignupData):
+    response = supabase.auth.sign_up(
+        {"email": sign.email,
+         "password": sign.password}
+    )
+    return {"message": "User signed up successfully"}
+
+@app.post("/login")
+def login(sign:SignupData):
+    response = supabase.auth.sign_in(
+        {"email": sign.email,
+         "password": sign.password}
+    )
+    return {"message": "User logged in successfully"}
 
 @app.get("/tasks/")
 @limiter.limit(limit)
