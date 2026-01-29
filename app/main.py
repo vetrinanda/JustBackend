@@ -1,188 +1,333 @@
 import os
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi import Request
-from pydantic import BaseModel
+from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, HttpUrl
 from dotenv import load_dotenv
-from app.databse import supabase
-from app.models import TaskCreate
-# from sqlalchemy.orm import Session
 import pyshorteners
+
+load_dotenv()
+
+from app.databse import supabase  # Note: typo 'databse' should be 'database'
+from app.models import TaskCreate
 from app.limiter import limiter
+from app.auth import user_dependency, get_current_user, router
 
-app = FastAPI()
+app = FastAPI(
+    title="Task Management API",
+    description="API for managing tasks and URL shortening",
+    version="1.0.0"
+)
 
-# Create the database tables
-# TTask.metadata.create_all(bind=engine)
-# Url.metadata.create_all(bind=engine)
+# Add CORS middleware if needed
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-limit = os.getenv("LIMIT")
+# Include authentication router
+app.include_router(router)
 
-class SignupData(BaseModel):
-    email: str
-    password: str
+# Get rate limit from environment
+limit = os.getenv("LIMIT", "10/minute")  # Default fallback
 
 
-# Authentication dependency
-def get_current_user(request: Request):
-    """Verify the user is authenticated by checking the authorization header"""
-    auth_header = request.headers.get("Authorization")
+# Pydantic model for URL shortener
+class UrlShortenerRequest(BaseModel):
+    url: HttpUrl  # Validates URL format
     
-    if not auth_header:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authorization header missing",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    # Extract the token from "Bearer <token>"
-    try:
-        scheme, token = auth_header.split()
-        if scheme.lower() != "bearer":
-            raise ValueError
-    except (ValueError, AttributeError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authorization header format",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    try:
-        # Verify the token with Supabase
-        user = supabase.auth.get_user(token)
-        return user
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-
-# def get_db():
-#     db = SessionLocal()
-#     try:
-#         yield db
-#     finally:
-#         db.close()
-        
-# db: Session = Depends(get_db)
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "url": "https://www.example.com/very/long/url"
+            }
+        }
 
 
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to the Task Management API"}
+    """Root endpoint - API information"""
+    return {
+        "message": "Welcome to the Task Management API",
+        "version": "1.0.0",
+        "docs": "/docs"
+    }
 
-app.post("/health")
+
+@app.get("/health")  # Changed from POST to GET
 def health_check():
-    return {"status": "API is healthy"}
-
-@app.post("/signup")
-def signup(sign: SignupData):
+    """Health check endpoint"""
     try:
-        response = supabase.auth.sign_up(
-            {"email": sign.email,
-             "password": sign.password}
-        )
-        return {
-            "message": "User signed up successfully",
-            "access_token": response.session.access_token if response.session else None
-        }
+        # Test database connection
+        supabase.table("tasks").select("id").limit(1).execute()
+        return {"status": "healthy", "database": "connected"}
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection failed"
         )
 
-@app.post("/login")
-def login(sign: SignupData):
+
+@app.get("/tasks/", response_model=list)
+@limiter.limit(limit)
+def read_tasks(request: Request, current_user: user_dependency):
+    """Get all tasks for the current user"""
     try:
-        response = supabase.auth.sign_in_with_password(
-            {"email": sign.email,
-             "password": sign.password}
+        response = (
+            supabase.table("tasks")
+            .select("*")
+            .eq("user_id", current_user["user_id"])  # Filter by user
+            .execute()
         )
-        return {
-            "message": "User logged in successfully",
-            "access_token": response.session.access_token,
-            "user_id": response.user.id
-        }
+        return response.data
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch tasks: {str(e)}"
         )
 
-@app.get("/tasks/")
+
+@app.post("/tasks/", status_code=status.HTTP_201_CREATED)
 @limiter.limit(limit)
-def read_tasks(request: Request, current_user = Depends(get_current_user)):
-    response = (
-    supabase.table("tasks")
-    .select("*")
-    .execute()
-)
-    return response.data
+def create_task(
+    request: Request,
+    task: TaskCreate,
+    current_user: user_dependency
+):
+    """Create a new task"""
+    try:
+        response = (
+            supabase.table("tasks")
+            .insert({
+                "task_name": task.task_name,
+                "task_description": task.task_description,
+                "done_status": task.done_status,
+                "user_id": current_user["user_id"]  # Associate with user
+            })
+            .execute()
+        )
+        
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Task creation failed"
+            )
+        
+        return {
+            "message": "Task added successfully",
+            "task": response.data[0]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create task: {str(e)}"
+        )
 
-@app.post("/tasks/")
+
+@app.get("/tasks/status/{task_status}")  # Better path structure
 @limiter.limit(limit)
-def create_task(request: Request, task: TaskCreate, current_user = Depends(get_current_user)):
-    response = (
-    supabase.table("tasks")
-    .insert({"task_name": task.task_name,
-             "task_description": task.task_description,
-             "done_status": task.done_status})
-    .execute())
-    return {"Task Added Sucessfully": response.data}
+def get_tasks_by_status(
+    request: Request,
+    task_status: bool,
+    current_user: user_dependency
+):
+    """Get tasks filtered by completion status"""
+    try:
+        response = (
+            supabase.table("tasks")
+            .select("*")
+            .eq("done_status", task_status)
+            .eq("user_id", current_user["user_id"])  # Filter by user
+            .execute()
+        )
+        return {"tasks": response.data, "count": len(response.data)}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch tasks: {str(e)}"
+        )
 
-@app.get("/tasks/done_status")
+
+@app.get("/tasks/{task_id}")  # Use task_id instead of task_name for unique identification
 @limiter.limit(limit)
-def get_task_status(request: Request, task_status: bool, current_user = Depends(get_current_user)):
-    response = (
-    supabase.table("tasks")
-    .select("*")
-    .eq("done_status",task_status)
-    .execute())
-    return {"Response": response.data}
+def read_task(
+    request: Request,
+    task_id: int,
+    current_user: user_dependency
+):
+    """Get a specific task by ID"""
+    try:
+        response = (
+            supabase.table("tasks")
+            .select("*")
+            .eq("id", task_id)
+            .eq("user_id", current_user["user_id"])  # Ensure user owns the task
+            .execute()
+        )
+        
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Task with ID {task_id} not found"
+            )
+        
+        return {"task": response.data[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch task: {str(e)}"
+        )
 
 
-@app.get("/tasks/{task_name}")
+@app.put("/tasks/{task_id}")
 @limiter.limit(limit)
-def read_task(request: Request, task_name: str, current_user = Depends(get_current_user)):
-    response=(supabase.table("tasks")
-              .select("*")
-              .eq("task_name",task_name)
-              .execute())
-    return {"Reponse":response.data}
+def update_task(
+    request: Request,
+    task_id: int,
+    task: TaskCreate,
+    current_user: user_dependency
+):
+    """Update an existing task"""
+    try:
+        # First check if task exists and belongs to user
+        existing = (
+            supabase.table("tasks")
+            .select("id")
+            .eq("id", task_id)
+            .eq("user_id", current_user["user_id"])
+            .execute()
+        )
+        
+        if not existing.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Task with ID {task_id} not found"
+            )
+        
+        response = (
+            supabase.table("tasks")
+            .update({
+                "task_name": task.task_name,
+                "task_description": task.task_description,
+                "done_status": task.done_status
+            })
+            .eq("id", task_id)
+            .eq("user_id", current_user["user_id"])
+            .execute()
+        )
+        
+        return {
+            "message": "Task updated successfully",
+            "task": response.data[0]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update task: {str(e)}"
+        )
 
-@app.put("/tasks/{task_name}")
+
+@app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit(limit)
-def update_task(request: Request, task_name: str, task: TaskCreate, current_user = Depends(get_current_user)):
-    response = (
-    supabase.table("tasks")
-    .update({"task_name": task.task_name,
-             "task_description": task.task_description,
-             "done_status": task.done_status})
-    .eq("task_name",task_name)
-    .execute())
-    return {"Updated the Task Details":response.data}
+def delete_task(
+    request: Request,
+    task_id: int,
+    current_user: user_dependency
+):
+    """Delete a task"""
+    try:
+        # Check if task exists and belongs to user
+        existing = (
+            supabase.table("tasks")
+            .select("id")
+            .eq("id", task_id)
+            .eq("user_id", current_user["user_id"])
+            .execute()
+        )
+        
+        if not existing.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Task with ID {task_id} not found"
+            )
+        
+        supabase.table("tasks").delete().eq("id", task_id).execute()
+        
+        return  # 204 No Content - no body returned
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete task: {str(e)}"
+        )
 
-@app.delete("/tasks/{task_name}")
+
+@app.post("/url-shortener", status_code=status.HTTP_201_CREATED)  # Fixed typo: shortner -> shortener
 @limiter.limit(limit)
-def delete_task(request: Request, task_name: str, current_user = Depends(get_current_user)):
-    response = (
-    supabase.table("tasks")
-    .delete()
-    .eq("task_name",task_name)
-    .execute())
-    return {"Task deleted successfully": response.data} 
+def shorten_url(
+    request: Request,
+    url_request: UrlShortenerRequest,
+    current_user: user_dependency
+):
+    """Shorten a URL"""
+    try:
+        s = pyshorteners.Shortener()
+        short_url = s.tinyurl.short(str(url_request.url))
+        
+        response = (
+            supabase.table("url_shortener")  # Fixed table name typo
+            .insert({
+                "url": str(url_request.url),
+                "short_url": short_url,
+                "user_id": current_user["user_id"]  # Associate with user
+            })
+            .execute()
+        )
+        
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="URL shortening failed"
+            )
+        
+        inserted_data = response.data[0]
+        return {
+            "original_url": inserted_data["url"],
+            "short_url": inserted_data["short_url"],
+            "created_at": inserted_data.get("created_at")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to shorten URL: {str(e)}"
+        )
 
 
-@app.post("/url-shortner")
+@app.get("/url-shortener/", response_model=list)
 @limiter.limit(limit)
-def url_shortner(request: Request, url: str, current_user = Depends(get_current_user)):
-    s = pyshorteners.Shortener()
-    short_url = s.tinyurl.short(url)
-    response = (
-    supabase.table("url_shortner")
-    .insert({"url": url,"short_url": short_url,})
-    .execute())
-    inserted_data = response.data[0]
-    return {"short_url": inserted_data["short_url"]}
+def get_shortened_urls(request: Request, current_user: user_dependency):
+    """Get all shortened URLs for the current user"""
+    try:
+        response = (
+            supabase.table("url_shortener")
+            .select("*")
+            .eq("user_id", current_user["user_id"])
+            .execute()
+        )
+        return response.data
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch URLs: {str(e)}"
+        )
