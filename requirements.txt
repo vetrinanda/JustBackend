@@ -5,3 +5,5 @@ sqlalchemy
 dotenv
 slowapi
 httpx
+requests 
+redis
