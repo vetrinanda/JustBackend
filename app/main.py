@@ -1,9 +1,14 @@
+from functools import cache
 import os
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from dotenv import load_dotenv
 import pyshorteners
+import json
+import redis
+
+rd=redis.Redis(host='localhost', port=6379, db=0)
 
 load_dotenv()
 
@@ -74,19 +79,24 @@ def health_check():
 @limiter.limit(limit)
 def read_tasks(request: Request, current_user: user_dependency):
     """Get all tasks for the current user"""
-    try:
-        response = (
-            supabase.table("tasks")
-            .select("*")
-            .eq("user_id", current_user["user_id"])  # Filter by user
-            .execute()
-        )
-        return response.data
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch tasks: {str(e)}"
-        )
+    cache=rd.get(f"tasks_{current_user['user_id']}")
+    if cache:
+        return json.loads(cache)
+    else:
+        try:
+            response = (
+                supabase.table("tasks")
+                .select("*")
+                .eq("user_id", current_user["user_id"])  # Filter by user
+                .execute()
+            )
+            rd.set(f"tasks_{current_user['user_id']}", json.dumps(response.data), ex=120)  # Cache for 120 seconds
+            return response.data
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to fetch tasks: {str(e)}"
+            )
 
 
 @app.post("/tasks/", status_code=status.HTTP_201_CREATED)
@@ -318,6 +328,9 @@ def shorten_url(
 @limiter.limit(limit)
 def get_shortened_urls(request: Request, current_user: user_dependency):
     """Get all shortened URLs for the current user"""
+    cache=rd.get(f"url_shortener_{current_user['user_id']}")
+    if cache:
+        return json.loads(cache)
     try:
         response = (
             supabase.table("url_shortener")
@@ -325,6 +338,7 @@ def get_shortened_urls(request: Request, current_user: user_dependency):
             .eq("user_id", current_user["user_id"])
             .execute()
         )
+        rd.set(f"url_shortener_{current_user['user_id']}", json.dumps(response.data), ex=120)  # Cache for 120 seconds
         return response.data
     except Exception as e:
         raise HTTPException(
