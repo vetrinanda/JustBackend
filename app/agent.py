@@ -9,9 +9,6 @@ from app.auth import user_dependency, get_current_user
 from app.limiter import limiter
 load_dotenv()
 limit=os.getenv("RATE_LIMIT","5/minute")
-provider = GoogleProvider(api_key=os.getenv("API_KEY"))
-model = GoogleModel('gemini-3-flash-preview', provider=provider)
-agent = Agent(model)
 
 router = APIRouter(tags=["Youtube Video QA"])
 
@@ -19,6 +16,9 @@ class VideoInput(BaseModel):
     video_url: str
     question: str
 
+provider = GoogleProvider(api_key=os.getenv("API_KEY"))
+model = GoogleModel('gemini-3-flash-preview', provider=provider)
+agent = Agent(model)
 
 @limiter.limit(limit)
 @router.post("/video")
