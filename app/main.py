@@ -16,10 +16,11 @@ from app.databse import supabase  # Note: typo 'databse' should be 'database'
 from app.models import TaskCreate
 from app.limiter import limiter
 from app.auth import user_dependency, get_current_user, router
+from app import agent
 
 app = FastAPI(
     title="Task Management API",
-    description="API for managing tasks and URL shortening",
+    description="API for managing tasks URL shortening, and Youtube video question answering.",
     version="1.0.0"
 )
 
@@ -34,6 +35,7 @@ app.add_middleware(
 
 # Include authentication router
 app.include_router(router)
+app.include_router(agent.router)
 
 # Get rate limit from environment
 limit = os.getenv("LIMIT", "10/minute")  # Default fallback
@@ -55,7 +57,7 @@ class UrlShortenerRequest(BaseModel):
 def read_root():
     """Root endpoint - API information"""
     return {
-        "message": "Welcome to the Task Management API",
+        "message": "Welcome to the Task Management API,URL shortener,and Youtube video question answering service.",
         "version": "1.0.0",
         "docs": "/docs"
     }

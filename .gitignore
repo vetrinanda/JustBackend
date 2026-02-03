@@ -43,11 +43,10 @@ htmlcov/
 
 # Package management
 .uv/
-uv.lock
 .pip-wheel-metadata/
 __pypackages__/
 __init__.py
 # FastAPI specific
 instance/
-.python-version
-pyproject.toml
+
+
