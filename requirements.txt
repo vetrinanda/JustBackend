@@ -7,3 +7,4 @@ slowapi
 httpx
 requests 
 redis
+pydantic-ai
